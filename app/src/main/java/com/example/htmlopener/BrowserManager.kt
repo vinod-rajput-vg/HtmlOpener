@@ -28,16 +28,20 @@ class BrowserManager(private val context: Context) {
 
         return resolveInfos.mapNotNull { info ->
             val activityInfo = info.activityInfo ?: return@mapNotNull null
-            BrowserInfo(
-                packageName = activityInfo.packageName,
-                label = info.loadLabel(packageManager).toString()
-            )
+            BrowserInfo(activityInfo.packageName, info.loadLabel(packageManager).toString())
         }.distinctBy { it.packageName }.sortedBy { it.label.lowercase() }
     }
 
     fun getDefaultBrowserPackage(): String? {
-        val browsers = getInstalledBrowsers()
-        return browsers.firstOrNull()?.packageName
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("http://example.com"))
+        val resolved = packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)
+        val packageName = resolved?.activityInfo?.packageName
+
+        if (packageName != null && packageName != context.packageName) {
+            return packageName
+        }
+
+        return getInstalledBrowsers().firstOrNull()?.packageName
     }
 
     fun isBrowserInstalled(packageName: String): Boolean =
