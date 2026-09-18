@@ -3,8 +3,10 @@ package com.example.htmlopener
 import android.content.ContentUris
 import android.content.Context
 import android.net.Uri
-import android.os.Build
+import android.os.Environment
 import android.provider.MediaStore
+import java.io.File
+import java.util.Collections
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -22,25 +24,44 @@ class HtmlFileScanner(private val context: Context) {
         cancelled.set(true)
     }
 
+    fun scanInternal(): List<HtmlFileEntry> =
+        scanDirectories(listOf(Environment.getExternalStorageDirectory()))
+
+    fun scanExternal(): List<HtmlFileEntry> {
+        val roots = ArrayList<File>()
+        val storage = File("/storage")
+        storage.listFiles()?.forEach { root ->
+            if (!cancelled.get() && root.isDirectory &&
+                root.name != "emulated" &&
+                root.name != "self" &&
+                root.canRead()
+            ) {
+                roots.add(root)
+            }
+        }
+
+        return scanDirectories(roots)
+    }
+
     fun scan(): List<HtmlFileEntry> {
-        cancelled.set(false)
+        val internal = scanInternal()
+        if (internal.isNotEmpty()) return internal
 
         val results = ArrayList<HtmlFileEntry>()
         val seen = HashSet<String>()
+        scanMediaStore(results, seen)
+        return results.sorted()
+    }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val volumes = try {
-                MediaStore.getExternalVolumeNames(context)
-            } catch (_: Exception) {
-                emptySet()
-            }
+    private fun scanDirectories(roots: List<File>): List<HtmlFileEntry> {
+        cancelled.set(false)
+        val results = ArrayList<HtmlFileEntry>()
+        val seenFiles = HashSet<String>()
+        val visitedDirectories = HashSet<String>()
 
-            for (volume in volumes) {
-                if (cancelled.get()) break
-                scanVolume(volume, results, seen)
-            }
-        } else {
-            scanLegacy(results, seen)
+        for (root in roots) {
+            if (cancelled.get()) break
+            scanDirectory(root, results, seenFiles, visitedDirectories)
         }
 
         return results
@@ -50,133 +71,116 @@ class HtmlFileScanner(private val context: Context) {
             )
     }
 
-    private fun scanVolume(
-        volume: String,
+    private fun scanDirectory(
+        directory: File,
         results: MutableList<HtmlFileEntry>,
-        seen: MutableSet<String>
+        seenFiles: MutableSet<String>,
+        visitedDirectories: MutableSet<String>
     ) {
-        val collection = MediaStore.Files.getContentUri(volume)
+        if (cancelled.get() || !directory.isDirectory || !directory.canRead()) return
 
-        val projection = buildList {
-            add(MediaStore.Files.FileColumns._ID)
-            add(MediaStore.Files.FileColumns.DISPLAY_NAME)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                add(MediaStore.Files.FileColumns.RELATIVE_PATH)
-            }
-            @Suppress("DEPRECATION")
-            add(MediaStore.Files.FileColumns.DATA)
-        }.toTypedArray()
+        val canonical = try {
+            directory.canonicalPath
+        } catch (_: Exception) {
+            directory.absolutePath
+        }
 
-        /*
-         * Do not filter with SQL LIKE here. Some Android TV/OEM MediaStore
-         * implementations handle filename matching inconsistently. Reading
-         * DISPLAY_NAME and checking the extension in Kotlin is more reliable.
-         */
-        try {
-            context.contentResolver.query(
-                collection,
-                projection,
-                null,
-                null,
-                MediaStore.Files.FileColumns.DISPLAY_NAME + " COLLATE NOCASE ASC"
-            )?.use { cursor ->
+        if (!visitedDirectories.add(canonical)) return
 
-                val idIndex = cursor.getColumnIndex(MediaStore.Files.FileColumns._ID)
-                val nameIndex = cursor.getColumnIndex(MediaStore.Files.FileColumns.DISPLAY_NAME)
-                val relativeIndex = cursor.getColumnIndex(MediaStore.Files.FileColumns.RELATIVE_PATH)
-                val dataIndex = cursor.getColumnIndex(MediaStore.Files.FileColumns.DATA)
+        val children = try {
+            directory.listFiles()
+        } catch (_: SecurityException) {
+            null
+        } ?: return
 
-                if (idIndex < 0 || nameIndex < 0) return@use
+        for (file in children) {
+            if (cancelled.get()) return
 
-                while (cursor.moveToNext() && !cancelled.get()) {
-                    val id = cursor.getLong(idIndex)
-                    val name = cursor.getString(nameIndex) ?: continue
+            if (file.isDirectory) {
+                scanDirectory(file, results, seenFiles, visitedDirectories)
+            } else if (file.isFile && isHtml(file.name)) {
+                val path = try {
+                    file.canonicalPath
+                } catch (_: Exception) {
+                    file.absolutePath
+                }
 
-                    if (!isHtml(name)) continue
-
-                    val relativePath = if (relativeIndex >= 0) {
-                        cursor.getString(relativeIndex).orEmpty()
-                    } else {
-                        ""
-                    }
-
-                    @Suppress("DEPRECATION")
-                    val dataPath = if (dataIndex >= 0) {
-                        cursor.getString(dataIndex).orEmpty()
-                    } else {
-                        ""
-                    }
-
-                    val displayPath = when {
-                        dataPath.isNotBlank() -> dataPath
-                        volume == MediaStore.VOLUME_EXTERNAL_PRIMARY ->
-                            "/storage/emulated/0/" + relativePath + name
-                        else ->
-                            "/storage/" + volume + "/" + relativePath + name
-                    }
-
-                    val uri = ContentUris.withAppendedId(collection, id)
-
-                    if (seen.add(uri.toString())) {
-                        results.add(HtmlFileEntry(name, displayPath, uri))
-                    }
+                if (seenFiles.add(path)) {
+                    results.add(
+                        HtmlFileEntry(
+                            name = file.name,
+                            path = path,
+                            uri = Uri.fromFile(file)
+                        )
+                    )
                 }
             }
-        } catch (_: Exception) {
-            // A storage volume may be unavailable or restricted on some TV ROMs.
         }
     }
 
-    private fun scanLegacy(
+    private fun scanMediaStore(
         results: MutableList<HtmlFileEntry>,
         seen: MutableSet<String>
     ) {
-        val collection = MediaStore.Files.getContentUri("external")
+        val volumes = try {
+            MediaStore.getExternalVolumeNames(context)
+        } catch (_: Exception) {
+            emptySet()
+        }
 
-        val displayName = MediaStore.Files.FileColumns.DISPLAY_NAME
-        val projection = arrayOf(
-            MediaStore.Files.FileColumns._ID,
-            displayName,
-            MediaStore.Files.FileColumns.DATA
-        )
+        for (volume in volumes) {
+            if (cancelled.get()) break
 
-        try {
-            @Suppress("DEPRECATION")
-            context.contentResolver.query(
-                collection,
-                projection,
-                null,
-                null,
-                displayName + " COLLATE NOCASE ASC"
-            )?.use { cursor ->
+            val collection = MediaStore.Files.getContentUri(volume)
+            val projection = arrayOf(
+                MediaStore.Files.FileColumns._ID,
+                MediaStore.Files.FileColumns.DISPLAY_NAME,
+                MediaStore.Files.FileColumns.RELATIVE_PATH
+            )
 
-                val idIndex = cursor.getColumnIndex(MediaStore.Files.FileColumns._ID)
-                val nameIndex = cursor.getColumnIndex(displayName)
-                val dataIndex = cursor.getColumnIndex(MediaStore.Files.FileColumns.DATA)
+            try {
+                context.contentResolver.query(
+                    collection,
+                    projection,
+                    null,
+                    null,
+                    MediaStore.Files.FileColumns.DISPLAY_NAME + " COLLATE NOCASE ASC"
+                )?.use { cursor ->
+                    val idIndex = cursor.getColumnIndex(MediaStore.Files.FileColumns._ID)
+                    val nameIndex = cursor.getColumnIndex(MediaStore.Files.FileColumns.DISPLAY_NAME)
+                    val relativeIndex = cursor.getColumnIndex(MediaStore.Files.FileColumns.RELATIVE_PATH)
 
-                if (idIndex < 0 || nameIndex < 0) return@use
+                    while (cursor.moveToNext() && !cancelled.get()) {
+                        if (idIndex < 0 || nameIndex < 0) continue
 
-                while (cursor.moveToNext() && !cancelled.get()) {
-                    val id = cursor.getLong(idIndex)
-                    val name = cursor.getString(nameIndex) ?: continue
+                        val name = cursor.getString(nameIndex) ?: continue
+                        if (!isHtml(name)) continue
 
-                    if (!isHtml(name)) continue
+                        val relative = if (relativeIndex >= 0) {
+                            cursor.getString(relativeIndex).orEmpty()
+                        } else {
+                            ""
+                        }
 
-                    val path = if (dataIndex >= 0) {
-                        cursor.getString(dataIndex).orEmpty()
-                    } else {
-                        name
-                    }
+                        val path = if (volume == MediaStore.VOLUME_EXTERNAL_PRIMARY) {
+                            "/storage/emulated/0/$relative$name"
+                        } else {
+                            "/storage/$volume/$relative$name"
+                        }
 
-                    val uri = ContentUris.withAppendedId(collection, id)
+                        val uri = ContentUris.withAppendedId(
+                            collection,
+                            cursor.getLong(idIndex)
+                        )
 
-                    if (seen.add(uri.toString())) {
-                        results.add(HtmlFileEntry(name, path, uri))
+                        if (seen.add(uri.toString())) {
+                            results.add(HtmlFileEntry(name, path, uri))
+                        }
                     }
                 }
+            } catch (_: Exception) {
+                // Continue with the next storage volume.
             }
-        } catch (_: Exception) {
-            // Ignore inaccessible storage providers.
         }
     }
 
@@ -184,4 +188,10 @@ class HtmlFileScanner(private val context: Context) {
         val lower = name.lowercase(Locale.ROOT)
         return lower.endsWith(".html") || lower.endsWith(".htm")
     }
+
+    private fun List<HtmlFileEntry>.sorted(): List<HtmlFileEntry> =
+        this.sortedWith(
+            compareBy<HtmlFileEntry> { it.name.lowercase(Locale.ROOT) }
+                .thenBy { it.path.lowercase(Locale.ROOT) }
+        )
 }
