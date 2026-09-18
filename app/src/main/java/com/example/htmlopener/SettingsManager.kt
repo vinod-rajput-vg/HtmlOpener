@@ -1,6 +1,7 @@
 package com.example.htmlopener
 
 import android.content.Context
+import android.net.Uri
 
 class SettingsManager(context: Context) {
     private val preferences = context.getSharedPreferences(
@@ -15,7 +16,15 @@ class SettingsManager(context: Context) {
         preferences.edit().putString(KEY_DEFAULT_BROWSER, packageName).apply()
     }
 
+    fun getStorageRoot(): Uri? =
+        preferences.getString(KEY_STORAGE_ROOT, null)?.let(Uri::parse)
+
+    fun setStorageRoot(uri: Uri) {
+        preferences.edit().putString(KEY_STORAGE_ROOT, uri.toString()).apply()
+    }
+
     companion object {
         private const val KEY_DEFAULT_BROWSER = "default_browser"
+        private const val KEY_STORAGE_ROOT = "storage_root"
     }
 }
