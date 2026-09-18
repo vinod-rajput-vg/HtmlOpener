@@ -1,7 +1,13 @@
 package com.example.htmlopener
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.Settings
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.widget.Toast
@@ -71,6 +77,48 @@ fun HtmlOpenerApp(
     var status by remember { mutableStateOf("Select an HTML file to begin.") }
     val context = LocalContext.current
 
+    fun ensureStorageAccess(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (Environment.isExternalStorageManager()) return true
+
+            try {
+                val intent = Intent(
+                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                    Uri.parse("package:${context.packageName}")
+                )
+                context.startActivity(intent)
+                Toast.makeText(
+                    context,
+                    "Allow All files access for HTML Opener, then return to the app.",
+                    Toast.LENGTH_LONG
+                ).show()
+            } catch (_: Exception) {
+                context.startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            }
+            return false
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+            context.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+        ) {
+            (context as? ComponentActivity)?.requestPermissions(
+                arrayOf(
+                    Manifest.permission.READ_EXTERNAL_STORAGE,
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE
+                ),
+                1001
+            )
+            Toast.makeText(
+                context,
+                "Allow storage access, then select Internal or External again.",
+                Toast.LENGTH_LONG
+            ).show()
+            return false
+        }
+
+        return true
+    }
+
     fun openSelectedHtml(uri: Uri) {
         selectedFile = uri
         selectedFileName = getFileName(context, uri)
@@ -112,14 +160,18 @@ fun HtmlOpenerApp(
                 showStorageSelection -> StorageSelectionScreen(
                     onBack = { showStorageSelection = false },
                     onInternal = {
-                        storageType = StorageType.INTERNAL
-                        showStorageSelection = false
-                        showFileManager = true
+                        if (ensureStorageAccess(context)) {
+                            storageType = StorageType.INTERNAL
+                            showStorageSelection = false
+                            showFileManager = true
+                        }
                     },
                     onExternal = {
-                        storageType = StorageType.EXTERNAL
-                        showStorageSelection = false
-                        showFileManager = true
+                        if (ensureStorageAccess(context)) {
+                            storageType = StorageType.EXTERNAL
+                            showStorageSelection = false
+                            showFileManager = true
+                        }
                     }
                 )
 
