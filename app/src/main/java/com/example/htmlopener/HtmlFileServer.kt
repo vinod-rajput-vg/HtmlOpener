@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import java.io.BufferedReader
 import java.io.FileInputStream
+import java.io.File
 import java.io.InputStreamReader
 import java.net.ServerSocket
 import java.net.Socket
