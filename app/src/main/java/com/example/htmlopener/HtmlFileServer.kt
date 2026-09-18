@@ -3,6 +3,7 @@ package com.example.htmlopener
 import android.content.Context
 import android.net.Uri
 import java.io.BufferedReader
+import java.io.FileInputStream
 import java.io.InputStreamReader
 import java.net.ServerSocket
 import java.net.Socket
@@ -76,7 +77,11 @@ class HtmlFileServer(private val context: Context) {
         }
 
         val inputStream = try {
-            context.contentResolver.openInputStream(uri)
+            if (uri.scheme == "file") {
+                FileInputStream(File(uri.path ?: return sendError(output)))
+            } else {
+                context.contentResolver.openInputStream(uri)
+            }
         } catch (_: Exception) {
             null
         }
