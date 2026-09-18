@@ -281,11 +281,9 @@ private fun HtmlFileManagerScreen(
         return
     }
 
-    val currentDocument = remember(currentUri) {
-        DocumentFile.fromTreeUri(
-            LocalContext.current,
-            currentUri
-        )
+    val context = LocalContext.current
+    val currentDocument = remember(currentUri, context) {
+        currentUri?.let { DocumentFile.fromTreeUri(context, it) }
     }
 
     if (currentDocument == null || !currentDocument.canRead()) {
