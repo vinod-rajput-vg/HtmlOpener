@@ -5,9 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Environment
 import android.provider.OpenableColumns
-import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -113,9 +111,9 @@ fun HtmlOpenerApp(
 
                 showFileManager -> HtmlFileManagerScreen(
                     onBack = { showFileManager = false },
-                    onFileSelected = { uri ->
+                    onFileSelected = { entry ->
                         showFileManager = false
-                        openSelectedHtml(uri)
+                        openSelectedHtml(entry.uri)
                     }
                 )
 
@@ -124,33 +122,8 @@ fun HtmlOpenerApp(
                     status = status,
                     onSettings = { showSettings = true },
                     onSelectFile = {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-                            !hasAllFilesAccess()
-                        ) {
-                            status = "Enable storage access, then return to HtmlOpener."
-                            try {
-                                val intent = Intent(
-                                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION
-                                ).apply {
-                                    data = Uri.parse("package:${context.packageName}")
-                                }
-                                context.startActivity(intent)
-                            } catch (_: Exception) {
-                                try {
-                                    context.startActivity(
-                                        Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
-                                    )
-                                } catch (_: Exception) {
-                                    Toast.makeText(
-                                        context,
-                                        "Storage permission settings are not available on this TV.",
-                                        Toast.LENGTH_LONG
-                                    ).show()
-                                }
-                            }
-                        } else {
-                            showFileManager = true
-                        }
+                        status = "Searching for HTML files..."
+                        showFileManager = true
                     },
                     onOpenFile = {
                         selectedFile?.let(::openSelectedHtml)
@@ -162,16 +135,6 @@ fun HtmlOpenerApp(
     }
 }
 
-private fun hasAllFilesAccess(): Boolean =
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-        try {
-            Environment.isExternalStorageManager()
-        } catch (_: Exception) {
-            false
-        }
-    } else {
-        true
-    }
 
 @Composable
 private fun HomeScreen(
@@ -218,7 +181,7 @@ private fun HomeScreen(
 @Composable
 private fun HtmlFileManagerScreen(
     onBack: () -> Unit,
-    onFileSelected: (Uri) -> Unit
+    onFileSelected: (HtmlFileEntry) -> Unit
 ) {
     val context = LocalContext.current
     var files by remember { mutableStateOf<List<HtmlFileEntry>>(emptyList()) }
@@ -265,7 +228,7 @@ private fun HtmlFileManagerScreen(
             Column(Modifier.weight(1f)) {
                 Text("HTML Files", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
                 Text(
-                    if (scanning) "Scanning internal and external storage..."
+                    if (scanning) "Searching available storage for HTML files..."
                     else "${files.size} HTML file(s) found",
                     color = Color.Gray,
                     fontSize = 16.sp
@@ -295,7 +258,7 @@ private fun HtmlFileManagerScreen(
                     Text(error ?: "No HTML files found.", color = Color.LightGray, fontSize = 20.sp)
                     Spacer(Modifier.height(20.dp))
                     Text(
-                        "Checked internal storage and connected external storage.",
+                        "Searching Android storage indexes for HTML files.",
                         color = Color.Gray,
                         fontSize = 16.sp
                     )
@@ -308,7 +271,7 @@ private fun HtmlFileManagerScreen(
                 Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                items(files, key = { it.file.absolutePath }) { entry ->
+                items(files, key = { it.uri.toString() }) { entry ->
                     HtmlFileRow(entry) {
                         onFileSelected(entry.uri)
                     }
@@ -346,13 +309,13 @@ private fun HtmlFileRow(entry: HtmlFileEntry, onClick: () -> Unit) {
 
         Column(Modifier.weight(1f)) {
             Text(
-                entry.file.name,
+                entry.name,
                 color = Color.White,
                 fontSize = 19.sp,
                 fontWeight = FontWeight.SemiBold
             )
             Text(
-                entry.file.absolutePath,
+                entry.path,
                 color = Color.Gray,
                 fontSize = 13.sp,
                 maxLines = 1
