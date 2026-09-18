@@ -104,7 +104,7 @@ fun HtmlOpenerApp(
                     status = status,
                     onSettings = { showSettings = true },
                     onSelectFile = {
-                        filePicker.launch(arrayOf("text/html", "text/plain"))
+                        filePicker.launch(arrayOf("text/html", "application/xhtml+xml"))
                     },
                     onOpenFile = {
                         val uri = selectedFile
