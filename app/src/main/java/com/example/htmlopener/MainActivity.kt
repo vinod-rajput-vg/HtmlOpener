@@ -1,9 +1,7 @@
 package com.example.htmlopener
 
 import android.content.Context
-import android.content.Intent
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.widget.Toast
@@ -293,8 +291,8 @@ private fun HtmlFileRow(entry: HtmlFileEntry, onClick: () -> Unit) {
                 RoundedCornerShape(10.dp)
             )
             .onFocusChanged { focused = it.isFocused }
-            .focusable()
             .clickable(onClick = onClick)
+            .focusable()
             .padding(horizontal = 20.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -380,7 +378,9 @@ private fun BrowserRow(browser: BrowserInfo, selected: Boolean, onClick: () -> U
             .background(if (focused) Color(0xFF303030) else Color(0xFF181818), RoundedCornerShape(10.dp))
             .border(BorderStroke(if (focused) 3.dp else 1.dp, if (focused) Color.White else Color(0xFF404040)), RoundedCornerShape(10.dp))
             .onFocusChanged { focused = it.isFocused }
-            .focusable().clickable(onClick = onClick).padding(horizontal = 22.dp),
+            .clickable(onClick = onClick)
+            .focusable()
+            .padding(horizontal = 22.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(if (selected) "●" else "○", color = Color.White, fontSize = 24.sp)
@@ -416,7 +416,8 @@ private fun TvIconButton(onClick: () -> Unit, content: @Composable () -> Unit) {
             .background(if (focused) Color.White else Color(0xFF202020), RoundedCornerShape(12.dp))
             .border(if (focused) 3.dp else 1.dp, if (focused) Color.White else Color(0xFF444444), RoundedCornerShape(12.dp))
             .onFocusChanged { focused = it.isFocused }
-            .focusable().clickable(onClick = onClick),
+            .clickable(onClick = onClick)
+            .focusable(),
         contentAlignment = Alignment.Center
     ) {
         CompositionLocalProvider(LocalContentColor provides if (focused) Color.Black else Color.White) {
