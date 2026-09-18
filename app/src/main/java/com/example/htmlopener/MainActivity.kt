@@ -187,7 +187,7 @@ private fun HtmlFileManagerScreen(
     var files by remember { mutableStateOf<List<HtmlFileEntry>>(emptyList()) }
     var scanning by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
-    val scanner = remember { HtmlFileScanner() }
+    val scanner = remember { HtmlFileScanner(context) }
 
     fun startScan() {
         scanner.cancel()
@@ -273,7 +273,7 @@ private fun HtmlFileManagerScreen(
             ) {
                 items(files, key = { it.uri.toString() }) { entry ->
                     HtmlFileRow(entry) {
-                        onFileSelected(entry.uri)
+                        onFileSelected(entry)
                     }
                 }
             }
