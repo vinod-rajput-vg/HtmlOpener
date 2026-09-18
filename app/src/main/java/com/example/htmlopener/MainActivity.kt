@@ -64,6 +64,8 @@ fun HtmlOpenerApp(
 ) {
     var showSettings by remember { mutableStateOf(false) }
     var showFileManager by remember { mutableStateOf(false) }
+    var showStorageSelection by remember { mutableStateOf(false) }
+    var storageType by remember { mutableStateOf(StorageType.INTERNAL) }
     var selectedFile by remember { mutableStateOf<Uri?>(null) }
     var selectedFileName by remember { mutableStateOf<String?>(null) }
     var status by remember { mutableStateOf("Select an HTML file to begin.") }
@@ -107,7 +109,22 @@ fun HtmlOpenerApp(
             when {
                 showSettings -> SettingsScreen(browserManager, settingsManager) { showSettings = false }
 
+                showStorageSelection -> StorageSelectionScreen(
+                    onBack = { showStorageSelection = false },
+                    onInternal = {
+                        storageType = StorageType.INTERNAL
+                        showStorageSelection = false
+                        showFileManager = true
+                    },
+                    onExternal = {
+                        storageType = StorageType.EXTERNAL
+                        showStorageSelection = false
+                        showFileManager = true
+                    }
+                )
+
                 showFileManager -> HtmlFileManagerScreen(
+                    storageType = storageType,
                     onBack = { showFileManager = false },
                     onFileSelected = { entry ->
                         showFileManager = false
@@ -120,8 +137,8 @@ fun HtmlOpenerApp(
                     status = status,
                     onSettings = { showSettings = true },
                     onSelectFile = {
-                        status = "Searching for HTML files..."
-                        showFileManager = true
+                        status = "Choose storage to scan..."
+                        showStorageSelection = true
                     },
                     onOpenFile = {
                         selectedFile?.let(::openSelectedHtml)
@@ -133,6 +150,101 @@ fun HtmlOpenerApp(
     }
 }
 
+
+enum class StorageType { INTERNAL, EXTERNAL }
+
+@Composable
+private fun StorageSelectionScreen(
+    onBack: () -> Unit,
+    onInternal: () -> Unit,
+    onExternal: () -> Unit
+) {
+    val firstFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        firstFocusRequester.requestFocus()
+    }
+
+    Column(
+        Modifier.fillMaxSize().padding(horizontal = 55.dp, vertical = 35.dp)
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Open HTML File", color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Bold)
+            TvButton("Back", onClick = onBack)
+        }
+
+        Spacer(Modifier.height(55.dp))
+
+        Column(
+            Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            StorageButton(
+                title = "Internal",
+                icon = { Icon(Icons.Default.Tv, null, Modifier.size(38.dp)) },
+                modifier = Modifier.focusRequester(firstFocusRequester),
+                onClick = onInternal
+            )
+
+            Spacer(Modifier.height(22.dp))
+
+            StorageButton(
+                title = "External",
+                icon = { Icon(Icons.Default.Usb, null, Modifier.size(38.dp)) },
+                onClick = onExternal
+            )
+        }
+    }
+}
+
+@Composable
+private fun StorageButton(
+    title: String,
+    icon: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    var focused by remember { mutableStateOf(false) }
+
+    Row(
+        modifier.fillMaxWidth().height(78.dp)
+            .background(
+                if (focused) Color.White else Color(0xFF181818),
+                RoundedCornerShape(10.dp)
+            )
+            .border(
+                BorderStroke(
+                    if (focused) 3.dp else 1.dp,
+                    if (focused) Color.White else Color(0xFF404040)
+                ),
+                RoundedCornerShape(10.dp)
+            )
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(onClick = onClick)
+            .focusable()
+            .padding(horizontal = 24.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        CompositionLocalProvider(
+            LocalContentColor provides if (focused) Color.Black else Color.White
+        ) {
+            icon()
+        }
+
+        Spacer(Modifier.width(25.dp))
+
+        Text(
+            title,
+            color = if (focused) Color.Black else Color.White,
+            fontSize = 21.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
 
 @Composable
 private fun HomeScreen(
@@ -178,6 +290,7 @@ private fun HomeScreen(
 
 @Composable
 private fun HtmlFileManagerScreen(
+    storageType: StorageType,
     onBack: () -> Unit,
     onFileSelected: (HtmlFileEntry) -> Unit
 ) {
@@ -202,11 +315,14 @@ private fun HtmlFileManagerScreen(
         if (!scanning) return@LaunchedEffect
 
         val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            scanner.scan()
+            when (storageType) {
+                StorageType.INTERNAL -> scanner.scanInternal()
+                StorageType.EXTERNAL -> scanner.scanExternal()
+            }
         }
 
         if (result.isEmpty()) {
-            error = "No .html or .htm files found."
+            error = "No .html or .htm files found in ${if (storageType == StorageType.INTERNAL) "Internal" else "External"} storage."
         }
         files = result
         scanning = false
@@ -224,9 +340,9 @@ private fun HtmlFileManagerScreen(
             Spacer(Modifier.width(22.dp))
 
             Column(Modifier.weight(1f)) {
-                Text("HTML Files", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                Text("${if (storageType == StorageType.INTERNAL) "Internal" else "External"} HTML Files", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
                 Text(
-                    if (scanning) "Searching available storage for HTML files..."
+                    if (scanning) "Searching ${if (storageType == StorageType.INTERNAL) "internal" else "external"} storage for HTML files..."
                     else "${files.size} HTML file(s) found",
                     color = Color.Gray,
                     fontSize = 16.sp
