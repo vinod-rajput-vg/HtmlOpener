@@ -3,13 +3,14 @@ package com.example.htmlopener
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.provider.OpenableColumns
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -21,8 +22,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -36,7 +37,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.documentfile.provider.DocumentFile
 
 class MainActivity : ComponentActivity() {
     private lateinit var browserManager: BrowserManager
@@ -85,7 +85,7 @@ fun HtmlOpenerApp(
 
         if (browser == null) {
             status = "No compatible browser detected."
-            Toast.makeText(context, "No compatible browser was detected. Open Settings to choose one.", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, "No compatible browser was detected.", Toast.LENGTH_LONG).show()
             showSettings = true
             return
         }
@@ -106,32 +106,13 @@ fun HtmlOpenerApp(
         }
     }
 
-    val storagePicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocumentTree()
-    ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-
-        try {
-            context.contentResolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION
-            )
-        } catch (_: Exception) {
-        }
-
-        settingsManager.setStorageRoot(uri)
-        showFileManager = true
-    }
-
     MaterialTheme {
         Surface(Modifier.fillMaxSize(), color = Color(0xFF080808)) {
             when {
                 showSettings -> SettingsScreen(browserManager, settingsManager) { showSettings = false }
 
                 showFileManager -> HtmlFileManagerScreen(
-                    settingsManager = settingsManager,
                     onBack = { showFileManager = false },
-                    onChooseStorage = { storagePicker.launch(null) },
                     onFileSelected = { uri ->
                         showFileManager = false
                         openSelectedHtml(uri)
@@ -143,8 +124,25 @@ fun HtmlOpenerApp(
                     status = status,
                     onSettings = { showSettings = true },
                     onSelectFile = {
-                        if (settingsManager.getStorageRoot() == null) storagePicker.launch(null)
-                        else showFileManager = true
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+                            !Environment.isExternalStorageManager()
+                        ) {
+                            status = "Storage permission is required."
+                            try {
+                                context.startActivity(
+                                    Intent(
+                                        Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                        Uri.parse("package:${context.packageName}")
+                                    )
+                                )
+                            } catch (_: Exception) {
+                                context.startActivity(
+                                    Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                                )
+                            }
+                        } else {
+                            showFileManager = true
+                        }
                     },
                     onOpenFile = {
                         selectedFile?.let(::openSelectedHtml)
@@ -165,7 +163,10 @@ private fun HomeScreen(
     onOpenFile: () -> Unit
 ) {
     val selectFocusRequester = remember { FocusRequester() }
-    LaunchedEffect(Unit) { selectFocusRequester.requestFocus() }
+
+    LaunchedEffect(Unit) {
+        selectFocusRequester.requestFocus()
+    }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 55.dp, vertical = 35.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -180,7 +181,6 @@ private fun HomeScreen(
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
             Text("Open HTML File", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(30.dp))
-
             TvButton("Select HTML File", Modifier.focusRequester(selectFocusRequester), onSelectFile)
 
             Spacer(Modifier.height(20.dp))
@@ -198,53 +198,45 @@ private fun HomeScreen(
 
 @Composable
 private fun HtmlFileManagerScreen(
-    settingsManager: SettingsManager,
     onBack: () -> Unit,
-    onChooseStorage: () -> Unit,
     onFileSelected: (Uri) -> Unit
 ) {
-    var currentUri by remember { mutableStateOf(settingsManager.getStorageRoot()) }
-    var entries by remember(currentUri) { mutableStateOf<List<DocumentFile>>(emptyList()) }
-    var loadError by remember(currentUri) { mutableStateOf<String?>(null) }
-
-    val rootUri = settingsManager.getStorageRoot()
-    if (rootUri == null) {
-        FileManagerEmptyState(onBack, onChooseStorage)
-        return
-    }
-
     val context = LocalContext.current
-    val currentDocument = remember(currentUri, context) {
-        currentUri?.let { uri ->
-            try { DocumentFile.fromTreeUri(context, uri) } catch (_: Exception) { null }
-        }
+    var files by remember { mutableStateOf<List<HtmlFileEntry>>(emptyList()) }
+    var scanning by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scanner = remember { HtmlFileScanner() }
+
+    fun startScan() {
+        scanner.cancel()
+        scanning = true
+        error = null
+        files = emptyList()
     }
 
-    LaunchedEffect(currentUri, currentDocument?.uri) {
-        if (currentDocument == null || !currentDocument.canRead()) {
-            entries = emptyList()
-            loadError = "Storage access is no longer available."
-            return@LaunchedEffect
-        }
-
-        try {
-            entries = currentDocument.listFiles()
-                .filter { it.isDirectory || isHtmlFile(it.name) }
-                .sortedWith(compareBy<DocumentFile> { !it.isDirectory }.thenBy { it.name?.lowercase() ?: "" })
-            loadError = null
-        } catch (_: Exception) {
-            entries = emptyList()
-            loadError = "Unable to read this storage location."
-        }
+    LaunchedEffect(Unit) {
+        startScan()
     }
 
-    val isRoot = currentUri == rootUri
-    val title = currentDocument?.name ?: if (isRoot) "HTML Files" else "Folder"
+    LaunchedEffect(scanning) {
+        if (!scanning) return@LaunchedEffect
+
+        val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            scanner.scan()
+        }
+
+        if (result.isEmpty()) {
+            error = "No .html or .htm files found."
+        }
+        files = result
+        scanning = false
+    }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 45.dp, vertical = 30.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             TvIconButton(onClick = {
-                if (isRoot) onBack() else currentUri = rootUri
+                scanner.cancel()
+                onBack()
             }) {
                 Icon(Icons.Default.ArrowBack, "Back", Modifier.size(30.dp))
             }
@@ -252,33 +244,54 @@ private fun HtmlFileManagerScreen(
             Spacer(Modifier.width(22.dp))
 
             Column(Modifier.weight(1f)) {
-                Text("HTML File Manager", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
-                Text(title, color = Color.Gray, fontSize = 16.sp)
+                Text("HTML Files", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    if (scanning) "Scanning internal and external storage..."
+                    else "${files.size} HTML file(s) found",
+                    color = Color.Gray,
+                    fontSize = 16.sp
+                )
             }
 
-            TvButton("Change Storage", Modifier.width(230.dp), onChooseStorage)
+            TvButton(
+                "Refresh",
+                modifier = Modifier.width(180.dp),
+                onClick = { startScan() }
+            )
         }
 
         Spacer(Modifier.height(25.dp))
 
         when {
-            loadError != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            scanning -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(loadError!!, color = Color.LightGray, fontSize = 20.sp)
-                    Spacer(Modifier.height(25.dp))
-                    TvButton("Choose Storage Again", onClick = onChooseStorage)
+                    CircularProgressIndicator()
+                    Spacer(Modifier.height(20.dp))
+                    Text("Searching for HTML files...", color = Color.LightGray, fontSize = 20.sp)
                 }
             }
 
-            entries.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("No HTML files or folders found.", color = Color.LightGray, fontSize = 20.sp)
+            files.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(error ?: "No HTML files found.", color = Color.LightGray, fontSize = 20.sp)
+                    Spacer(Modifier.height(20.dp))
+                    Text(
+                        "Checked internal storage and connected external storage.",
+                        color = Color.Gray,
+                        fontSize = 16.sp
+                    )
+                    Spacer(Modifier.height(25.dp))
+                    TvButton("Scan Again", onClick = { startScan() })
+                }
             }
 
-            else -> LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                items(entries, key = { it.uri.toString() }) { entry ->
-                    FileManagerRow(entry) {
-                        if (entry.isDirectory) currentUri = entry.uri
-                        else onFileSelected(entry.uri)
+            else -> LazyColumn(
+                Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                items(files, key = { it.file.absolutePath }) { entry ->
+                    HtmlFileRow(entry) {
+                        onFileSelected(entry.uri)
                     }
                 }
             }
@@ -287,34 +300,16 @@ private fun HtmlFileManagerScreen(
 }
 
 @Composable
-private fun FileManagerEmptyState(
-    onBack: () -> Unit,
-    onChooseStorage: () -> Unit,
-    message: String = "Choose a storage location to browse HTML files."
-) {
-    Column(
-        Modifier.fillMaxSize().padding(55.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text("HTML File Manager", color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(20.dp))
-        Text(message, color = Color.LightGray, fontSize = 18.sp)
-        Spacer(Modifier.height(30.dp))
-        TvButton("Choose Storage", onClick = onChooseStorage)
-        Spacer(Modifier.height(15.dp))
-        TvButton("Back", onClick = onBack)
-    }
-}
-
-@Composable
-private fun FileManagerRow(file: DocumentFile, onClick: () -> Unit) {
+private fun HtmlFileRow(entry: HtmlFileEntry, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
 
     Row(
-        Modifier.fillMaxWidth().height(72.dp)
+        Modifier.fillMaxWidth().height(76.dp)
             .background(if (focused) Color(0xFF303030) else Color(0xFF181818), RoundedCornerShape(10.dp))
-            .border(BorderStroke(if (focused) 3.dp else 1.dp, if (focused) Color.White else Color(0xFF404040)), RoundedCornerShape(10.dp))
+            .border(
+                BorderStroke(if (focused) 3.dp else 1.dp, if (focused) Color.White else Color(0xFF404040)),
+                RoundedCornerShape(10.dp)
+            )
             .onFocusChanged { focused = it.isFocused }
             .focusable()
             .clickable(onClick = onClick)
@@ -322,26 +317,29 @@ private fun FileManagerRow(file: DocumentFile, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
-            if (file.isDirectory) Icons.Default.Folder else Icons.Default.FolderOpen,
+            Icons.Default.FolderOpen,
             null,
             tint = if (focused) Color.White else Color.LightGray,
             modifier = Modifier.size(30.dp)
         )
+
         Spacer(Modifier.width(18.dp))
 
         Column(Modifier.weight(1f)) {
-            Text(file.name ?: "Unnamed", color = Color.White, fontSize = 19.sp,
-                fontWeight = if (file.isDirectory) FontWeight.SemiBold else FontWeight.Normal)
-            if (!file.isDirectory) Text("HTML", color = Color.Gray, fontSize = 14.sp)
+            Text(
+                entry.file.name,
+                color = Color.White,
+                fontSize = 19.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                entry.file.absolutePath,
+                color = Color.Gray,
+                fontSize = 13.sp,
+                maxLines = 1
+            )
         }
-
-        if (file.isDirectory) Text(">", color = Color.Gray, fontSize = 24.sp)
     }
-}
-
-private fun isHtmlFile(name: String?): Boolean {
-    val lower = name?.lowercase() ?: return false
-    return lower.endsWith(".html") || lower.endsWith(".htm")
 }
 
 @Composable
