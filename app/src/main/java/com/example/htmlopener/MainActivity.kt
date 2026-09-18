@@ -125,20 +125,28 @@ fun HtmlOpenerApp(
                     onSettings = { showSettings = true },
                     onSelectFile = {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-                            !Environment.isExternalStorageManager()
+                            !hasAllFilesAccess()
                         ) {
-                            status = "Storage permission is required."
+                            status = "Enable storage access, then return to HtmlOpener."
                             try {
-                                context.startActivity(
-                                    Intent(
-                                        Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                                        Uri.parse("package:${context.packageName}")
-                                    )
-                                )
+                                val intent = Intent(
+                                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION
+                                ).apply {
+                                    data = Uri.parse("package:${context.packageName}")
+                                }
+                                context.startActivity(intent)
                             } catch (_: Exception) {
-                                context.startActivity(
-                                    Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
-                                )
+                                try {
+                                    context.startActivity(
+                                        Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                                    )
+                                } catch (_: Exception) {
+                                    Toast.makeText(
+                                        context,
+                                        "Storage permission settings are not available on this TV.",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
                             }
                         } else {
                             showFileManager = true
@@ -153,6 +161,17 @@ fun HtmlOpenerApp(
         }
     }
 }
+
+private fun hasAllFilesAccess(): Boolean =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        try {
+            Environment.isExternalStorageManager()
+        } catch (_: Exception) {
+            false
+        }
+    } else {
+        true
+    }
 
 @Composable
 private fun HomeScreen(
