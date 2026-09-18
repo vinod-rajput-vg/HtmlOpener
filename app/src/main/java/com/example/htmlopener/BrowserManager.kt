@@ -35,6 +35,11 @@ class BrowserManager(private val context: Context) {
         }.distinctBy { it.packageName }.sortedBy { it.label.lowercase() }
     }
 
+    fun getDefaultBrowserPackage(): String? {
+        val browsers = getInstalledBrowsers()
+        return browsers.firstOrNull()?.packageName
+    }
+
     fun isBrowserInstalled(packageName: String): Boolean =
         try {
             packageManager.getApplicationInfo(packageName, 0)
