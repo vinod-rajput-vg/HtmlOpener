@@ -4,6 +4,7 @@ import android.content.ContentUris
 import android.content.Context
 import android.net.Uri
 import android.os.Environment
+import android.os.storage.StorageManager
 import android.provider.MediaStore
 import java.io.File
 import java.util.Collections
@@ -29,18 +30,47 @@ class HtmlFileScanner(private val context: Context) {
 
     fun scanExternal(): List<HtmlFileEntry> {
         val roots = ArrayList<File>()
-        val storage = File("/storage")
-        storage.listFiles()?.forEach { root ->
-            if (!cancelled.get() && root.isDirectory &&
-                root.name != "emulated" &&
-                root.name != "self" &&
-                root.canRead()
-            ) {
-                roots.add(root)
+        val seenRoots = HashSet<String>()
+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            try {
+                val storageManager = context.getSystemService(StorageManager::class.java)
+                storageManager?.storageVolumes?.forEach { volume ->
+                    if (!cancelled.get() &&
+                        !volume.isPrimary &&
+                        volume.state == Environment.MEDIA_MOUNTED
+                    ) {
+                        val directory = volume.directory
+                        if (directory != null && directory.isDirectory && directory.canRead()) {
+                            val path = try { directory.canonicalPath } catch (_: Exception) { directory.absolutePath }
+                            if (seenRoots.add(path)) roots.add(directory)
+                        }
+                    }
+                }
+            } catch (_: Exception) {
             }
         }
 
-        return scanDirectories(roots)
+        val storage = File("/storage")
+        try {
+            storage.listFiles()?.forEach { root ->
+                if (!cancelled.get() && root.isDirectory &&
+                    root.name != "emulated" &&
+                    root.name != "self" &&
+                    root.canRead()
+                ) {
+                    val path = try { root.canonicalPath } catch (_: Exception) { root.absolutePath }
+                    if (seenRoots.add(path)) roots.add(root)
+                }
+            }
+        } catch (_: SecurityException) {
+        }
+
+        val results = scanDirectories(roots).toMutableList()
+        val seen = results.mapTo(HashSet()) { it.uri.toString() }
+        scanMediaStoreExternal(results, seen)
+
+        return results.sorted()
     }
 
     fun scan(): List<HtmlFileEntry> {
@@ -114,6 +144,63 @@ class HtmlFileScanner(private val context: Context) {
                         )
                     )
                 }
+            }
+        }
+    }
+
+    private fun scanMediaStoreExternal(
+        results: MutableList<HtmlFileEntry>,
+        seen: MutableSet<String>
+    ) {
+        val volumes = try {
+            MediaStore.getExternalVolumeNames(context)
+        } catch (_: Exception) {
+            emptySet()
+        }
+
+        for (volume in volumes) {
+            if (cancelled.get() || volume == MediaStore.VOLUME_EXTERNAL_PRIMARY) continue
+
+            val collection = MediaStore.Files.getContentUri(volume)
+            val projection = arrayOf(
+                MediaStore.Files.FileColumns._ID,
+                MediaStore.Files.FileColumns.DISPLAY_NAME,
+                MediaStore.Files.FileColumns.RELATIVE_PATH
+            )
+
+            try {
+                context.contentResolver.query(
+                    collection,
+                    projection,
+                    null,
+                    null,
+                    MediaStore.Files.FileColumns.DISPLAY_NAME + " COLLATE NOCASE ASC"
+                )?.use { cursor ->
+                    val idIndex = cursor.getColumnIndex(MediaStore.Files.FileColumns._ID)
+                    val nameIndex = cursor.getColumnIndex(MediaStore.Files.FileColumns.DISPLAY_NAME)
+                    val relativeIndex = cursor.getColumnIndex(MediaStore.Files.FileColumns.RELATIVE_PATH)
+
+                    while (cursor.moveToNext() && !cancelled.get()) {
+                        if (idIndex < 0 || nameIndex < 0) continue
+
+                        val name = cursor.getString(nameIndex) ?: continue
+                        if (!isHtml(name)) continue
+
+                        val relative = if (relativeIndex >= 0) {
+                            cursor.getString(relativeIndex).orEmpty()
+                        } else {
+                            ""
+                        }
+
+                        val path = "/storage/$volume/$relative$name"
+                        val uri = ContentUris.withAppendedId(collection, cursor.getLong(idIndex))
+
+                        if (seen.add(uri.toString())) {
+                            results.add(HtmlFileEntry(name, path, uri))
+                        }
+                    }
+                }
+            } catch (_: Exception) {
             }
         }
     }
